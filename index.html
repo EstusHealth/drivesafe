@@ -135,7 +135,8 @@
     .app-chrome{display:none !important}
     .wrap{max-width:100%;padding:0}
     .card{box-shadow:none;border:1px solid #ccc;page-break-inside:avoid}
-    #screen>*:not(#reportScreen){display:none}
+    #screen>*:not(#reportWrap){display:none}
+    #reportWrap>*:not(#reportScreen){display:none}
   }
 
   /* --- spatial DriveSafe entry --- */
@@ -586,7 +587,7 @@ function rateRow(q,which,val){
   return row;
 }
 function aSummary(){
-  const wrap=el("div");const rep=el("div","card");rep.id="reportScreen";
+  const wrap=el("div");wrap.id="reportWrap";const rep=el("div","card");rep.id="reportScreen";
   const dsT=dsTotal(),dsb=dsBand(dsT),ixT=ixTotal(),daT=daTotal(),missed=dsMissed(),cl=state.client;
   rep.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
     <div><h2 style="margin:0">DriveSafe &amp; DriveAware — Results</h2><div class="muted" style="font-size:13px">Client self-administered, auto-scored</div></div>
@@ -611,7 +612,7 @@ function aSummary(){
   wrap.appendChild(rep);
   const act=el("div","card app-chrome");act.innerHTML=`<h2 style="font-size:16px;margin:0 0 10px">Save &amp; export</h2>`;
   const br=el("div","btnrow");
-  const p=el("button","btn primary","🖨 Print / Save PDF");p.onclick=()=>window.print();
+  const p=el("button","btn primary","🖨 Print / Save PDF");p.onclick=()=>{if(!document.getElementById("reportScreen")){alert("Open the Summary step first, then print.");return;}window.print();};
   const j=el("button","btn","⬇ Export JSON");j.onclick=exportJSON;
   const csv=el("button","btn","⬇ Export CSV");csv.onclick=exportCSV;
   const nw=el("button","btn ghost","New client");nw.onclick=newAssessment;
@@ -647,8 +648,15 @@ function cWelcome(){
 /* --- Client DriveSafe --- */
 function cDS(){
   if(!state.ds.pr)state.ds.pr={cur:0,seen:{},resp:{},checked:{},done:false,go:false};
-  if(!state.ds.pr.done)return cDSPractice();
-  if(!state.ds.pr.go)return cDSPause();
+  const scr=!state.ds.pr.done?cDSPractice():(!state.ds.pr.go?cDSPause():cDSMain());
+  const w=el("div");w.appendChild(scr);
+  const sk=el("div","btnrow");sk.style.justifyContent="center";
+  const b=el("button","btn ghost","Skip picture task ⏭");b.style.cssText="font-size:13px;opacity:.75";
+  b.onclick=()=>{if(confirm("Skip the rest of the picture task and go straight to the intersections? Unanswered photos will score 0."))cGo("ix");};
+  sk.appendChild(b);w.appendChild(sk);
+  return w;
+}
+function cDSMain(){
   const wrap=el("div");
   const i=state.ds.cur;const total=11;
   const c=el("div","card");
@@ -899,14 +907,19 @@ function cIX(){
   c.appendChild(el("p","lead","Look at the diagram, then tap the vehicles in the order you think they should proceed (first, second, …)."));
   const dia=el("div","ix-diagram");dia.innerHTML=ixSVG(i);c.appendChild(dia);
   imgURL("ix-"+i).then(u=>{if(u)dia.innerHTML=`<img src="${u}" style="max-width:100%;border-radius:10px">`;});
-  const resp=state.ix.resp[i]||[];
   const sb=el("div","seqbtns");
-  letters.forEach(L=>{const used=resp.indexOf(L)>=0;const b=el("button","vbtn"+(used?" used":""),L);if(!used)b.onclick=()=>{if(!state.ix.resp[i])state.ix.resp[i]=[];if(state.ix.resp[i].length<item.answer.length){state.ix.resp[i].push(L);save();render();}};sb.appendChild(b);});
+  const disp=el("div");disp.style.margin="4px 0 8px";
+  function drawIX(){ /* in-place update: no full render() on taps, so the page never scrolls */
+    const resp=state.ix.resp[i]||[];
+    sb.innerHTML="";
+    letters.forEach(L=>{const used=resp.indexOf(L)>=0;const b=el("button","vbtn"+(used?" used":""),L);if(!used)b.onclick=()=>{if(!state.ix.resp[i])state.ix.resp[i]=[];if(state.ix.resp[i].length<item.answer.length){state.ix.resp[i].push(L);save();drawIX();}};sb.appendChild(b);});
+    disp.innerHTML=`<span class="seqshow">${resp.length?resp.join("  →  "):'<span class="muted" style="font-size:14px;letter-spacing:0">— none chosen —</span>'}</span>`;
+  }
   c.appendChild(el("div","objlabel","Tap the vehicles in order"));
   c.appendChild(sb);
-  const disp=el("div");disp.style.margin="4px 0 8px";disp.innerHTML=`<span class="seqshow">${resp.length?resp.join("  →  "):'<span class="muted" style="font-size:14px;letter-spacing:0">— none chosen —</span>'}</span>`;
   c.appendChild(disp);
-  const reset=el("button","btn ghost","Start over");reset.onclick=()=>{state.ix.resp[i]=[];save();render();};
+  drawIX();
+  const reset=el("button","btn ghost","Start over");reset.onclick=()=>{state.ix.resp[i]=[];save();drawIX();};
   c.appendChild(reset);
   wrap.appendChild(c);
   const nav=el("div","btnrow");
@@ -1096,7 +1109,15 @@ function results(){
 }
 function dl(name,type,data){const b=new Blob([data],{type});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
 function fname(ext){const n=(state.client.name||"client").replace(/[^a-z0-9]+/gi,"_");return `DSDA_${n}_${state.client.date||""}.${ext}`;}
-function exportJSON(){dl(fname("json"),"application/json",JSON.stringify(results(),null,2));}
+function exportJSON(){
+  const data=JSON.stringify(results(),null,2);
+  try{dl(fname("json"),"application/json",data);}
+  catch(e){
+    const w=window.open("","_blank");
+    if(w){w.document.write("<pre>"+data.replace(/&/g,"&amp;").replace(/</g,"&lt;")+"</pre>");w.document.close();}
+    else alert("Export failed: "+e.message);
+  }
+}
 function exportCSV(){
   const r=results();const rows=[["Field","Value"]];
   rows.push(["Client name",r.client.name],["File/ID",r.client.id],["DOB",r.client.dob],["Date",r.client.date],["Assessing OT",r.client.assessor],["Referral",r.client.referral],["",""]);
